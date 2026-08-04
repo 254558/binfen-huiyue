@@ -1,9 +1,23 @@
-<!DOCTYPE html>
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+生成 rive-preview-standalone.html —— 完全自包含的预览页：
+把 rive.min.js（运行时）、rive.wasm、kimi_linear_attention.riv 全部 base64 内嵌，
+双击即可打开（file:// 协议下也能跑，不依赖本地 HTTP 服务）。
+
+用法：python3 build-standalone.py
+"""
+import base64
+import pathlib
+
+ROOT = pathlib.Path(__file__).resolve().parent
+
+TEMPLATE = r"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Kimi Doodle Rive 动画预览</title>
+<title>Kimi Doodle Rive 动画预览（独立版）</title>
 <style>
   body {
     margin: 0;
@@ -21,37 +35,15 @@
     border-radius: 12px;
     background: #000;
   }
-  #file-hint {
-    position: fixed;
-    bottom: 16px;
-    left: 50%;
-    transform: translateX(-50%);
-    padding: 8px 16px;
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: #bbb;
-    font-size: 13px;
-    z-index: 9;
-    display: none;
-  }
 </style>
 </head>
 <body>
   <canvas id="rive-canvas" width="800" height="400"></canvas>
-  <div id="file-hint"></div>
 
+  <!-- @rive-app/canvas 2.32.0 运行时（内嵌，完全离线） -->
   <script>
-    // file:// 下 fetch 受 CORS 限制无法加载 wasm/.riv，提示改用独立版或本地服务
-    if (location.protocol === "file:") {
-      var hint = document.getElementById("file-hint");
-      hint.style.display = "block";
-      hint.textContent = "提示：file:// 打开无法加载动画。请双击 rive-preview-standalone.html，或运行 python3 -m http.server 后访问 http://localhost:8765/rive-preview.html";
-    }
+/*__RIVE_JS__*/
   </script>
-
-  <!-- 官方 Rive 运行时 @rive-app/canvas 2.32.0（kimi 同款，本地文件，完全离线可用） -->
-  <script src="rive.min.js?v=232"></script>
   <script>
     window.__riveState = { loaded: false, error: null, stateMachines: [], animationNames: [], pageErrors: [] };
     window.addEventListener('error', function (e) { window.__riveState.pageErrors.push('error: ' + (e && e.message)); });
@@ -69,7 +61,6 @@
     var riveInstance = null;
 
     function setTheme(mode) {
-      // 与 kimi RiveImg 一致：light/dark 输入，0=浅色 1=深色
       if (!riveInstance) return;
       try {
         var sm = (riveInstance.stateMachineNames || [])[0];
@@ -81,29 +72,85 @@
       } catch (e) { /* 忽略 */ }
     }
 
+    // 超采样缓冲：canvas.width/height = CSS 尺寸 × dpr × ss（幂等）
+    function applySharpness(rive) {
+      try {
+        var st = window.__riveState.sharp;
+        if (!st) return;
+        rive.resizeDrawingSurfaceToCanvas((window.devicePixelRatio || 1) * st.ss);
+        window.__riveState.buffer = { w: rive.canvas.width, h: rive.canvas.height };
+      } catch (e) {
+        window.__riveState.resizeErr = String(e);
+      }
+    }
+
+    function playAfterReady(rive) {
+      var canvas = document.getElementById("rive-canvas");
+      var tries = 0;
+      var timer = setInterval(function () {
+        tries++;
+        var art = rive.artboard;
+        if (art || tries > 60) {
+          clearInterval(timer);
+          var machines = rive.stateMachineNames || [];
+          var anims = rive.animationNames || [];
+          window.__riveState.stateMachines = machines;
+          window.__riveState.animationNames = anims;
+          if (art) {
+            if (machines.length > 0) rive.play(machines[0]);
+            else if (anims.length > 0) rive.play(anims[0]);
+            setTheme(1); // 深色背景，默认深色主题
+            window.__riveState.artboardSize = {
+              w: rive.artboardWidth,
+              h: rive.artboardHeight,
+              dpr: window.devicePixelRatio,
+            };
+            var qs = new URLSearchParams(location.search);
+            var s = parseFloat(qs.get("s"));
+            if (!(s > 0)) s = 800 / rive.artboardWidth;
+            var ss = parseFloat(qs.get("ss"));
+            if (!(ss >= 1)) ss = 2;
+            var displayW = Math.round(rive.artboardWidth * s);
+            var displayH = Math.round(rive.artboardHeight * s);
+            canvas.style.width = displayW + "px";
+            canvas.style.height = displayH + "px";
+            window.__riveState.sharp = { s: s, ss: ss, displayW: displayW, displayH: displayH };
+            applySharpness(rive);
+            // 运行时内部监听 canvas 尺寸变化会按 dpr 重建缓冲，可能覆盖超采样；延迟重放确保生效
+            setTimeout(function () { applySharpness(rive); }, 80);
+            setTimeout(function () { applySharpness(rive); }, 400);
+          }
+        }
+      }, 500);
+    }
+
     function init() {
       if (window.__riveState.loaded) return;
       var canvas = document.getElementById("rive-canvas");
-      // UMD 构建将 API 挂载在 window.rive 上（@rive-app/canvas v2）
       var RiveClass = window.Rive || (window.rive && window.rive.Rive);
-      if (!RiveClass) {
-        window.__riveState.error = "Rive 运行时未加载";
-        return;
-      }
-      // 将 WASM 指向本地文件，避免依赖 unpkg/jsdelivr CDN
+      if (!RiveClass) { window.__riveState.error = "Rive 运行时未加载"; return; }
+      // WASM 内嵌为 data URL：file:// 下 fetch(data:) 不受 CORS 限制
       try {
         var RL = window.rive.RuntimeLoader;
-        if (RL && RL.setWasmUrl) RL.setWasmUrl("rive.wasm");
-      } catch (e) { /* 忽略 */ }
-
+        if (RL && RL.setWasmUrl) RL.setWasmUrl("data:application/wasm;base64,/*__WASM_B64__*/");
+      } catch (e) { window.__riveState.pageErrors.push('wasm url: ' + e); }
+      // 动画字节内嵌为 base64，解码后以 ArrayBuffer 直接交给运行时（完全不走 fetch）
+      var b64 = "/*__RIV_B64__*/";
+      var u8;
+      try {
+        var bin = atob(b64);
+        u8 = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      } catch (e) {
+        window.__riveState.error = "riv base64 解码失败: " + e;
+        return;
+      }
       var r = new RiveClass({
         canvas: canvas,
-        // 通过 ?file=xxx.riv 切换测试文件，默认播放 kimi 的动画
-        src: new URLSearchParams(location.search).get("file") || "kimi_linear_attention.riv",
+        buffer: u8.buffer,
         autoplay: true,
         onLoad: function () {
-          // 注意：onLoad 回调收到的参数是事件对象 {type, data}，不是 Rive 实例！
-          // 必须使用闭包里的真实实例 r。
+          // onLoad 回调参数是事件对象 {type, data}，必须用闭包里的实例
           window.__rive = r;
           riveInstance = r;
           onLoad(r);
@@ -118,70 +165,10 @@
       playAfterReady(rive);
     }
 
-    // 超采样缓冲：canvas.width/height = CSS 尺寸 × dpr × ss。
-    // 幂等，可在运行时内部 resize 覆盖后重复调用。
-    function applySharpness(rive) {
-      try {
-        var st = window.__riveState.sharp;
-        if (!st) return;
-        rive.resizeDrawingSurfaceToCanvas((window.devicePixelRatio || 1) * st.ss);
-        window.__riveState.buffer = { w: rive.canvas.width, h: rive.canvas.height };
-      } catch (e) {
-        window.__riveState.resizeErr = String(e);
-      }
-    }
-
-    // 轮询等待 artboard 就绪（onLoad 时可能尚未挂载），就绪后播放并设置主题输入
-    function playAfterReady(rive) {
-      var canvas = document.getElementById("rive-canvas");
-      var tries = 0;
-      var timer = setInterval(function () {
-        tries++;
-        var art = rive.artboard;
-        if (art || tries > 60) {
-          clearInterval(timer);
-          var machines = rive.stateMachineNames || [];
-          var anims = rive.animationNames || [];
-          window.__riveState.stateMachines = machines;
-          window.__riveState.animationNames = anims;
-          if (art) {
-            // 与 kimi 一致：优先播放第一个状态机
-            if (machines.length > 0) rive.play(machines[0]);
-            else if (anims.length > 0) rive.play(anims[0]);
-            setTheme(1); // 深色背景，默认深色主题
-            // 记录 artboard 设计尺寸与设备像素比（诊断清晰度用）
-            window.__riveState.artboardSize = {
-              w: rive.artboardWidth,
-              h: rive.artboardHeight,
-              dpr: window.devicePixelRatio,
-            };
-            // 清晰度：显示尺寸 = 设计尺寸 × s；绘图缓冲 = 显示尺寸 × dpr × ss（超采样）
-            // 超采样让矢量边缘和位图缩放都更锐利；浏览器再把缓冲缩回显示尺寸
-            var qs = new URLSearchParams(location.search);
-            var s = parseFloat(qs.get("s"));
-            if (!(s > 0)) s = 800 / rive.artboardWidth; // 默认约 2.05 倍（800 宽）
-            var ss = parseFloat(qs.get("ss"));
-            if (!(ss >= 1)) ss = 2; // 默认 2× 超采样
-            var displayW = Math.round(rive.artboardWidth * s);
-            var displayH = Math.round(rive.artboardHeight * s);
-            canvas.style.width = displayW + "px";
-            canvas.style.height = displayH + "px";
-            window.__riveState.sharp = { s: s, ss: ss, displayW: displayW, displayH: displayH };
-            applySharpness(rive);
-            // 运行时内部监听 canvas 尺寸变化会自动按 dpr 重建缓冲，可能覆盖超采样；
-            // 多次延迟重放，确保最终缓冲 = 显示尺寸 × dpr × ss
-            setTimeout(function () { applySharpness(rive); }, 80);
-            setTimeout(function () { applySharpness(rive); }, 400);
-          }
-        }
-      }, 500);
-    }
-
     function onError(e) {
       window.__riveState.error = String(e && e.message ? e.message : e);
     }
 
-    // 页面加载完成后初始化
     window.addEventListener("load", function () {
       setTimeout(function () {
         if (typeof Rive !== "undefined" || (window.rive && window.rive.Rive)) init();
@@ -190,3 +177,23 @@
   </script>
 </body>
 </html>
+"""
+
+
+def main():
+    rive_js = (ROOT / "rive.min.js").read_text(encoding="utf-8").replace("</script>", "<\\/script>")
+    wasm_b64 = base64.b64encode((ROOT / "rive.wasm").read_bytes()).decode("ascii")
+    riv_b64 = base64.b64encode((ROOT / "kimi_linear_attention.riv").read_bytes()).decode("ascii")
+    html = (
+        TEMPLATE
+        .replace("/*__RIVE_JS__*/", rive_js)
+        .replace("/*__WASM_B64__*/", wasm_b64)
+        .replace("/*__RIV_B64__*/", riv_b64)
+    )
+    out = ROOT / "rive-preview-standalone.html"
+    out.write_text(html, encoding="utf-8")
+    print("已生成 %s（%.2f MB）" % (out.name, len(html) / 1024 / 1024))
+
+
+if __name__ == "__main__":
+    main()

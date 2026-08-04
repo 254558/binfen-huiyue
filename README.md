@@ -2,15 +2,13 @@
 
 kimi.com 对话框上方 doodle 动画的**离线**预览。动画是 Rive 格式（`.riv`），用 kimi 同款的官方运行时 `@rive-app/canvas` 2.32.0 本地播放，不依赖任何 CDN。
 
-## 文件
+## 快速开始（推荐）
 
-| 文件 | 说明 |
-|---|---|
-| `rive-preview.html` | 预览页（纯黑背景，无 UI） |
-| `kimi_linear_attention.riv` | 动画文件（源自 kimi.com 的 A/B 灰度资产） |
-| `rive.min.js` / `rive.wasm` / `rive_fallback.wasm` | @rive-app/canvas 2.32.0 运行时（kimi 同款，本地离线） |
+**双击 `rive-preview-standalone.html` 即可**——这是独立版：运行时、wasm、动画文件全部内嵌（约 2.2 MB），`file://` 下也能跑，完全离线。
 
-## 运行
+> 更新动画文件后，用 `python3 build-standalone.py` 重新生成独立版。
+
+或者用本地服务打开普通版：
 
 ```bash
 python3 -m http.server 8765
@@ -18,7 +16,17 @@ python3 -m http.server 8765
 
 打开 http://localhost:8765/rive-preview.html
 
-> 需要本地 HTTP 服务：Rive 运行时加载 `.wasm` 受 CORS 限制，直接双击 `file://` 打开不行。
+> `rive-preview.html` 需要本地 HTTP 服务（Rive 运行时加载 `.wasm` 受 CORS 限制，直接双击 `file://` 打开不行，页面会显示提示）。
+
+## 文件
+
+| 文件 | 说明 |
+|---|---|
+| `rive-preview-standalone.html` | **双击即用**的独立版（内嵌全部资源，离线可用） |
+| `rive-preview.html` | 普通版（需本地 HTTP 服务，体积小） |
+| `build-standalone.py` | 生成独立版的构建脚本 |
+| `kimi_linear_attention.riv` | 动画文件（源自 kimi.com 的 A/B 灰度资产） |
+| `rive.min.js` / `rive.wasm` / `rive_fallback.wasm` | @rive-app/canvas 2.32.0 运行时（kimi 同款，本地离线） |
 
 ## 参数（URL 追加即可，可组合）
 
