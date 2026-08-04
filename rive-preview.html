@@ -20,6 +20,8 @@
   canvas {
     border-radius: 12px;
     background: #000;
+    /* 动画内容在 artboard 内偏下约 16%（实测 3 帧稳定），上移使其视觉居中 */
+    transform: translateY(-16%);
   }
   #file-hint {
     position: fixed;
@@ -159,7 +161,13 @@
             // 超采样让矢量边缘和位图缩放都更锐利；浏览器再把缓冲缩回显示尺寸
             var qs = new URLSearchParams(location.search);
             var s = parseFloat(qs.get("s"));
-            if (!(s > 0)) s = 800 / rive.artboardWidth; // 默认约 2.05 倍（800 宽）
+            if (!(s > 0)) {
+              // 默认：尽量大，方便分享展示（≤1000 宽，且不超过视口的 92% 宽 / 78% 高）
+              var vw = window.innerWidth || 1280;
+              var vh = window.innerHeight || 720;
+              var targetW = Math.min(1000, vw * 0.92, vh * 0.78 * (rive.artboardWidth / rive.artboardHeight));
+              s = targetW / rive.artboardWidth;
+            }
             var ss = parseFloat(qs.get("ss"));
             if (!(ss >= 1)) ss = 2; // 默认 2× 超采样
             var displayW = Math.round(rive.artboardWidth * s);
