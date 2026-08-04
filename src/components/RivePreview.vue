@@ -13,6 +13,7 @@ import { Rive, RuntimeLoader } from "@rive-app/canvas";
 import riveWasmUrl from "@rive-app/canvas/rive.wasm?url";
 
 const canvasRef = ref(null);
+const loading = ref(true); // 加载完成前用黑罩盖住 canvas，避免露出 Rive 默认加载动画
 let rive = null;
 let destroyed = false;
 
@@ -77,7 +78,9 @@ function playAfterReady(instance) {
           if (!destroyed) applySharpness(instance, sharp);
         }, 80);
         setTimeout(() => {
-          if (!destroyed) applySharpness(instance, sharp);
+          if (destroyed) return;
+          applySharpness(instance, sharp);
+          loading.value = false; // 最后一遍重放完成，揭开遮罩
         }, 400);
       }
     }
@@ -104,14 +107,29 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <canvas ref="canvasRef" width="800" height="400" class="rive-preview"></canvas>
+  <div class="preview-wrap">
+    <canvas ref="canvasRef" width="800" height="400" class="rive-preview"></canvas>
+    <!-- 加载遮罩：纯黑盖住 Rive 默认加载动画（彩点），就绪后揭开 -->
+    <div v-if="loading" class="preview-mask" aria-hidden="true"></div>
+  </div>
 </template>
 
 <style scoped>
+.preview-wrap {
+  position: relative;
+  /* 动画内容在 artboard 内偏下约 16%（实测 3 帧稳定），上移使其视觉居中；
+     放在 wrap 上，让遮罩与 canvas 一起移动、完全贴合 */
+  transform: translateY(-16%);
+}
 .rive-preview {
+  display: block;
   border-radius: 12px;
   background: #000;
-  /* 动画内容在 artboard 内偏下约 16%（实测 3 帧稳定），上移使其视觉居中 */
-  transform: translateY(-16%);
+}
+.preview-mask {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  background: #000;
 }
 </style>
