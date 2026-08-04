@@ -110,10 +110,10 @@ TEMPLATE = r"""<!DOCTYPE html>
             var qs = new URLSearchParams(location.search);
             var s = parseFloat(qs.get("s"));
             if (!(s > 0)) {
-              // 默认：尽量大，方便分享展示（≤1000 宽，且不超过视口的 92% 宽 / 78% 高）
+              // 默认：尽量大，方便分享展示（≤1200 宽，且不超过视口的 94% 宽 / 85% 高）
               var vw = window.innerWidth || 1280;
               var vh = window.innerHeight || 720;
-              var targetW = Math.min(1000, vw * 0.92, vh * 0.78 * (rive.artboardWidth / rive.artboardHeight));
+              var targetW = Math.min(1200, vw * 0.94, vh * 0.85 * (rive.artboardWidth / rive.artboardHeight));
               s = targetW / rive.artboardWidth;
             }
             var ss = parseFloat(qs.get("ss"));
