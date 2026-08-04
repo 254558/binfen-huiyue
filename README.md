@@ -1,4 +1,7 @@
-# Kimi Doodle Rive 动画预览
+# 缤纷辉月 · Kimi Doodle Rive 动画预览
+
+> 动画名：**缤纷辉月**——色彩缤纷 × 辉月，呼应 Moonshot 登月意象。
+> 仓库名用拼音 `binfen-huiyue`（GitHub 仓库名仅支持英文/数字/连字符，不支持中文）。
 
 kimi.com 对话框上方 doodle 动画的**离线**预览。动画是 Rive 格式（`.riv`），用 kimi 同款的官方运行时 `@rive-app/canvas` 2.32.0 本地播放，不依赖任何 CDN。
 
