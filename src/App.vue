@@ -1,10 +1,10 @@
 <script setup>
-import RivePreview from "./components/RivePreview.vue";
+import CanvasPreview from "./components/CanvasPreview.vue";
 </script>
 
 <template>
   <main class="stage">
-    <RivePreview />
+    <CanvasPreview />
   </main>
 </template>
 
