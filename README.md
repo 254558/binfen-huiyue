@@ -1,22 +1,83 @@
-# 缤纷辉月 · Kimi Doodle Rive 动画预览
+# 缤纷辉月 · Kimi Doodle 动画复刻
 
-> 动画名：**缤纷辉月**——色彩缤纷 × 辉月，呼应 Moonshot 登月意象。
-> 仓库名用拼音 `binfen-huiyue`（GitHub 仓库名仅支持英文/数字/连字符，不支持中文）。
+> 用原生 Canvas API 复刻 kimi.com 对话框上方的 doodle 动画效果，不依赖 Rive 运行时。
 
-kimi.com 对话框上方的 doodle 动画，是 **Rive** 制作的（`.riv` 矢量动画格式）。本仓库是它的 **Vue 3 + Vite** 版离线预览：用 Kimi 同款的官方运行时 `@rive-app/canvas` 2.32.0 播放，深色主题，资源本地托管。
+## 效果概览
 
-## 它是 Rive 做的
+四个 7×7 的点阵方块，每个方块内有 3-5 个彩色点缀，其余为灰度点。点呈现呼吸动画（大小和透明度周期性变化），整体带有鱼眼畸变效果（中心大、边缘小，边缘呈弧形）。鼠标悬停时，点阵平滑过渡为 "kimi" 字样——字母部分的点变亮白，其余点变暗。鼠标靠近某个点时，该点会缩小。
 
-- **动画文件**：`public/kimi_linear_attention.riv` —— Rive 编辑器（[editor.rive.app](https://editor.rive.app)）制作的标准 `.riv` 文件
-- **播放引擎**：Rive 官方 Web 运行时（JavaScript + WebAssembly），通过 npm 包 `@rive-app/canvas` 集成
-- **想改动画**：用 Rive 编辑器打开 `.riv` 直接编辑，无需碰代码
+## 技术实现
+
+### 1. 点阵布局
+
+每个方块是一个 7×7 的网格，共 4 个方块（对应 k、i、m、i 四个字母）。每个网格位置放置一个圆角矩形点，使用 Canvas `roundRect` 绘制，圆角系数 0.8（接近圆形但保留方形轮廓）。
+
+### 2. 颜色分布
+
+每个点的颜色在初始化时随机分配：
+
+- **灰度色阶**：从 `#ffffff`（纯白）到 `#101010`（近黑）共 30 个灰度等级。使用 `Math.pow(Math.random(), 0.7)` 做幂函数分布，让中间色调出现概率更高，模拟自然的光影层次。
+- **彩色点缀**：每个方块随机选 3-5 个位置放置彩色点（蓝、绿、红、紫、粉），入场时颜色丰富。
+- **彩色呼吸**：彩色点在彩色和灰度之间周期性摆动（正弦函数），hover 时减弱该效果。
+- **最低亮度保护**：绘制时将颜色下限钳制在 `0x33`，避免点和黑色背景融为一体。
+
+### 3. 鱼眼畸变
+
+通过两个系数实现桶形畸变效果：
+
+```
+dist = 点到网格中心的归一化距离（0=中心，1=最远角）
+
+sizeFactor   = 1 - dist × 0.5    // 点的大小：中心最大，边缘缩小
+shrinkFactor = 1 - dist × 0.2    // 位置收缩：边缘点向中心微缩，形成弧形轮廓
+```
+
+两个系数共同作用，模拟了透过凸透镜观察网格的效果。
+
+### 4. 呼吸动画
+
+每个点有一个随机的 `phase`（相位），在 `requestAnimationFrame` 循环中：
+
+```
+pulse = sin(time × 1.2 + phase)
+radius = baseRadius × (0.7 + 0.3 × pulse)   // 半径在 70%~100% 之间波动
+alpha  = 0.7 + 0.15 × (pulse + 1)           // 透明度周期性变化
+```
+
+每个点的相位不同，此起彼伏，产生有机的流动感。
+
+### 5. Hover 显示字母
+
+每个点在创建时标记了 `letter`（是否属于 kimi 字母的一部分），字母形状通过 7×7 的 0/1 矩阵定义：
+
+```
+K:          i:          m:          i:
+0 1 0 0 0 1 0   0 0 0 1 0 0 0   1 1 0 0 0 1 1   0 0 0 1 0 0 0
+0 1 0 0 1 0 0   0 0 0 1 0 0 0   1 0 1 1 1 0 1   0 0 0 1 0 0 0
+0 1 0 1 0 0 0   0 0 0 1 0 0 0   1 0 0 1 0 0 1   0 0 0 1 0 0 0
+0 1 1 1 0 0 0   0 0 0 1 0 0 0   1 0 0 1 0 0 1   0 0 0 1 0 0 0
+0 1 0 1 0 0 0   0 0 0 1 0 0 0   1 0 0 0 0 0 1   0 0 0 1 0 0 0
+0 1 0 0 1 0 0   0 0 0 1 0 0 0   1 0 0 0 0 0 1   0 0 0 1 0 0 0
+0 1 0 0 0 1 0   0 0 0 1 0 0 0   1 0 0 0 0 0 1   0 0 0 1 0 0 0
+```
+
+悬停时通过平滑插值将每个点的属性过渡到 hover 目标状态：
+
+| 属性 | 字母点 | 非字母点 |
+|---|---|---|
+| 颜色 | → `#f0f0f0`（亮白） | → `#404040`（暗灰） |
+| 透明度 | → 1.0 | → 0.45 |
+
+### 6. 鼠标交互
+
+鼠标靠近某个点时（距离 < 20px），该点会缩小（最近时缩到 50%），不产生推挤效果。
 
 ## 快速开始
 
 ```bash
 npm install
-npm run dev      # 开发预览（http://localhost:5173）
-npm run build    # 生产构建（输出到 dist/）
+npm run dev      # 开发预览（http://localhost:3000）
+npm run build    # 生产构建
 npm run preview  # 本地预览构建产物
 ```
 
@@ -25,53 +86,24 @@ npm run preview  # 本地预览构建产物
 | 路径 | 说明 |
 |---|---|
 | `src/App.vue` | 页面布局（黑底居中舞台） |
-| `src/components/RivePreview.vue` | 核心组件：创建 Rive 实例、播放、深色主题、`s/ss` 参数与超采样 |
-| `public/kimi_linear_attention.riv` | 动画源文件（Rive 格式，源自 kimi.com 的 A/B 灰度资产） |
+| `src/components/CanvasPreview.vue` | 核心组件：点阵创建、鱼眼畸变、呼吸动画、hover 交互 |
 
-## 播放参数（URL 追加，可组合）
+## 可调参数
 
-| 参数 | 作用 | 默认 |
+所有关键参数均在 `CanvasPreview.vue` 顶部，带注释：
+
+| 参数 | 默认值 | 作用 |
 |---|---|---|
-| `?s=<倍率>` | 显示大小（相对设计分辨率 391×185） | 自适应：≤1200 宽（且不超过视口 94% 宽 / 85% 高） |
-| `?ss=<倍率>` | 超采样倍数（越高边缘越锐） | 2 |
-
-示例：
-
-- `?s=0.83` 模拟原站大小（325×154）
-- `?s=1` 按设计分辨率 1:1 显示（最锐）
-- `?ss=4` 4 倍超采样
-
-## 怎么用到你自己的网页里
-
-### 方式一：npm 集成（推荐，本仓库即这种方式）
-
-```bash
-npm install @rive-app/canvas@2.32.0
-```
-
-```js
-import { Rive, RuntimeLoader } from "@rive-app/canvas";
-import riveWasmUrl from "@rive-app/canvas/rive.wasm?url";
-
-RuntimeLoader.setWasmUrl(riveWasmUrl); // Vite 下需显式指定 wasm 路径
-
-const r = new Rive({
-  src: "/kimi_linear_attention.riv",
-  canvas: document.getElementById("rive-canvas"),
-  autoplay: true,
-  stateMachines: "State Machine 1",
-});
-```
-
-> 注意：`RuntimeLoader` 是独立导出的类，不是 `Rive` 的静态属性（`Rive.RuntimeLoader` 为 `undefined`）。
-
-## 动画结构
-
-- artboard：`doodle`（设计分辨率 391×185）
-- 动画：`dark`、`light`、`change color`、`keep change`
-- 状态机：`State Machine 1`（`light/dark` 输入控制明暗主题，本预览固定深色）
-- 内嵌一张 2463×598 的 PNG 位图（Linear Attention 公式文字）
+| `DOT_SPACING` | 20 | 点间距（同时影响点大小） |
+| `BLOCK_GAP` | 50 | 四个方块之间的间距 |
+| `ROWS` / `COLS` | 7 | 每个方块的行列数 |
+| `NUM_BLOCKS` | 4 | 方块数量 |
+| `MOUSE_RADIUS` | 20 | 鼠标影响半径 |
+| `shrinkFactor` 系数 | 0.2 | 鱼眼位置收缩强度 |
+| `sizeFactor` 系数 | 0.5 | 鱼眼大小衰减强度 |
+| `baseRadius` 系数 | 0.38 | 点的基础大小 |
+| `cornerRadius` 系数 | 0.8 | 圆角程度（0=直角，1=正圆） |
 
 ## 来源与版权
 
-动画资产源自 kimi.com（https://www.kimi.com/）对话框上方 doodle（A/B 灰度资产），仅用于技术研究与学习。
+动画效果源自 kimi.com（https://www.kimi.com/）对话框上方 doodle，仅用于技术研究与学习。

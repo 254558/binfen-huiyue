@@ -2,36 +2,42 @@
 import { onBeforeUnmount, onMounted, ref } from "vue";
 
 const canvasRef = ref(null);
-let animationId = null;
-let dots = [];
-let time = 0;
-let isHovering = false;
-let hoverTransition = 0;
+let animId = null;
 
-// 点与点之间的间距（同时影响点的大小，因为 baseRadius 是它的倍数）
-const DOT_SPACING = 26;
-// 四个方块之间的间距
-const BLOCK_GAP = 50;
-// 每个方块的行数
-const ROWS = 7;
-// 每个方块的列数
-const COLS = 7;
-// 方块数量（kimi 四个字母）
-const NUM_BLOCKS = 4;
+// ═══════════════════════════════════════════════════
+//  Configuration
+// ═══════════════════════════════════════════════════
+const DOT_SPACING  = 26;
+const BLOCK_GAP    = 50;
+const ROWS         = 7;
+const COLS         = 7;
+const NUM_BLOCKS   = 4;
+const MOUSE_RADIUS = 20;
+const ENTER_TIME   = 2.0;
 
-const GRAYS = [
-  "#ffffff", "#f0f0f0", "#e8e8e8", "#e0e0e0", "#d8d8d8",
-  "#d0d0d0", "#c8c8c8", "#c0c0c0", "#b8b8b8", "#b0b0b0",
-  "#a8a8a8", "#a0a0a0", "#989898", "#909090", "#888888",
-  "#808080", "#787878", "#707070", "#686868", "#606060",
-  "#585858", "#505050", "#484848", "#404040", "#383838",
-  "#303030", "#282828", "#202020", "#181818", "#101010"
+// ══════════════════════════════════════════════════
+//  Pre-computed color tables — 消除每帧 parseInt
+// ═══════════════════════════════════════════════════
+const hx = (s) => [
+  parseInt(s.slice(1, 3), 16),
+  parseInt(s.slice(3, 5), 16),
+  parseInt(s.slice(5, 7), 16),
 ];
 
-const ACCENTS = ["#5b9bd5", "#70c070", "#d07070", "#9070b0", "#d070b0"];
+const GRAYS = [
+  "#ffffff", "#f0f0f0", "#e8e8e8", "#e0e0e0", "#d8d8d8", "#d0d0d0",
+  "#c8c8c8", "#c0c0c0", "#b8b8b8", "#b0b0b0", "#a8a8a8", "#a0a0a0",
+  "#989898", "#909090", "#888888", "#808080", "#787878", "#707070",
+  "#686868", "#606060", "#585858", "#505050", "#484848", "#404040",
+  "#383838", "#303030", "#282828", "#202020", "#181818", "#101010",
+].map(hx);
 
-// "kimi" 字母在 7×7 网格中的形状 (1=字母部分，0=背景)
-const LETTER_PATTERNS = [
+const ACCENTS = ["#5b9bd5", "#70c070", "#d07070", "#9070b0", "#d070b0"].map(hx);
+
+// ═══════════════════════════════════════════════════
+//  Letter patterns (7×7 grid)
+// ═══════════════════════════════════════════════════
+const PATTERNS = [
   // K
   [
     [0, 1, 0, 0, 0, 1, 0],
@@ -74,172 +80,287 @@ const LETTER_PATTERNS = [
   ],
 ];
 
+// ═══════════════════════════════════════════════════
+//  Runtime state
+// ═══════════════════════════════════════════════════
+let dots = [];
+let time = 0;
+let hovering = false;
+let hoverT = 0;
+let elapsed = 0;
+let lastTs = 0;
+let mouse = { x: -9999, y: -9999, active: false };
+let cachedW = 0;
+let cachedH = 0;
+let cachedDpr = 0;
+
+// ═══════════════════════════════════════════════════
+//  Easing helpers
+// ═══════════════════════════════════════════════════
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+const easeOutExpo = (t) => (t >= 1 ? 1 : 1 - Math.pow(2, -10 * t));
+
+// ═══════════════════════════════════════════════════
+//  createDots
+// ═══════════════════════════════════════════════════
 function createDots() {
   dots = [];
-  let offsetX = 0;
-  let accentIdx = 0;
+  let ox = 0;
+  let ai = 0;
 
-  for (let block = 0; block < NUM_BLOCKS; block++) {
-    const accentR = Math.floor(Math.random() * ROWS);
-    const accentC = Math.floor(Math.random() * COLS);
-    const pattern = LETTER_PATTERNS[block];
+  for (let b = 0; b < NUM_BLOCKS; b++) {
+    const pat = PATTERNS[b];
+    const cr = (ROWS - 1) / 2;
+    const cc = (COLS - 1) / 2;
+    const md = Math.sqrt(cr * cr + cc * cc);
 
-    const centerR = (ROWS - 1) / 2;
-    const centerC = (COLS - 1) / 2;
-    const maxDist = Math.sqrt(centerR * centerR + centerC * centerC);
+    // 每个方块 3-5 个彩色点
+    const accentCount = 3 + ~~(Math.random() * 3);
+    const accentSet = new Set();
+    for (let i = 0; i < accentCount; i++) {
+      accentSet.add(~~(Math.random() * ROWS * COLS));
+    }
 
-    for (let row = 0; row < ROWS; row++) {
-      for (let col = 0; col < COLS; col++) {
-        const dr = row - centerR;
-        const dc = col - centerC;
-        const dist = Math.sqrt(dr * dr + dc * dc) / maxDist;
-
-        // 鱼眼畸变：点的大小衰减系数，值越大边缘点越小（0~1）
-        const sizeFactor = 1 - dist * 0.7;
-        // 鱼眼畸变：位置向中心收缩系数，值越大边缘越内收、弧形越明显（0~1）
-        const shrinkFactor = 1 - dist * 0.25;
-        const x = offsetX + (col - centerC) * DOT_SPACING * shrinkFactor + centerC * DOT_SPACING;
-        const y = (row - centerR) * DOT_SPACING * shrinkFactor + centerR * DOT_SPACING;
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const dr = r - cr;
+        const dc = c - cc;
+        const d = Math.sqrt(dr * dr + dc * dc) / md;
+        const sf = 1 - d * 0.2;
+        const tx =
+          ox + (c - cc) * DOT_SPACING * sf + cc * DOT_SPACING;
+        const ty = (r - cr) * DOT_SPACING * sf + cr * DOT_SPACING;
 
         let color;
-        if (row === accentR && col === accentC) {
-          color = ACCENTS[accentIdx % ACCENTS.length];
-          accentIdx++;
+        let accent = false;
+        const idx = r * COLS + c;
+        if (accentSet.has(idx)) {
+          color = ACCENTS[ai++ % ACCENTS.length];
+          accent = true;
         } else {
-          const idx = Math.floor(Math.pow(Math.random(), 0.7) * GRAYS.length);
-          color = GRAYS[idx];
+          color = GRAYS[~~(Math.pow(Math.random(), 0.7) * GRAYS.length)];
         }
 
         dots.push({
-          x,
-          y,
+          tx,
+          ty,
+          x: tx,
+          y: ty,
           color,
-          row,
-          col,
-          block,
-          isLetterDot: pattern[row][col] === 1,
+          accent,
+          letter: pat[r][c] === 1,
           phase: Math.random() * Math.PI * 2,
-          // 点的基础半径：DOT_SPACING 的倍数，值越大点越大
-          baseRadius: DOT_SPACING * 0.38 * sizeFactor,
+          baseR: DOT_SPACING * 0.38 * (1 - d * 0.5),
+          sx: (Math.random() - 0.5) * 200,
+          sy: (Math.random() - 0.5) * 200,
+          delay: d * 0.4 + b * 0.08 + Math.random() * 0.1,
         });
       }
     }
-
-    offsetX += COLS * DOT_SPACING + BLOCK_GAP;
+    ox += COLS * DOT_SPACING + BLOCK_GAP;
   }
 
-  const totalWidth = offsetX - BLOCK_GAP;
-  const centerX = -totalWidth / 2;
-  dots.forEach((dot) => {
-    dot.x += centerX;
+  const cx = -(ox - BLOCK_GAP) / 2;
+  dots.forEach((d) => {
+    d.tx += cx;
+    d.sx += d.tx;
+    d.sy += d.ty;
   });
 }
 
-function drawDot(ctx, dot, t) {
+// ═══════════════════════════════════════════════════
+//  drawDot
+// ═══════════════════════════════════════════════════
+function drawDot(ctx, dot, t, ht, ent) {
   const pulse = Math.sin(t * 1.2 + dot.phase);
-  const minRadius = dot.baseRadius * 0.6;
-  const normalRadius = Math.max(minRadius, dot.baseRadius * (0.7 + 0.3 * pulse));
+  const breathR = Math.max(
+    dot.baseR * 0.6,
+    dot.baseR * (0.7 + 0.3 * pulse)
+  );
+  const breathA = 0.7 + 0.15 * (pulse + 1);
 
-  const r = parseInt(dot.color.slice(1, 3), 16);
-  const g = parseInt(dot.color.slice(3, 5), 16);
-  const b = parseInt(dot.color.slice(5, 7), 16);
-  const minBright = 0x33;
-  const normalR = Math.max(r, minBright);
-  const normalG = Math.max(g, minBright);
-  const normalB = Math.max(b, minBright);
+  // 鼠标靠近时点变小
+  let mouseScale = 1;
+  if (mouse.active) {
+    const dx = dot.x - mouse.x;
+    const dy = dot.y - mouse.y;
+    const md = Math.sqrt(dx * dx + dy * dy);
+    if (md < MOUSE_RADIUS && md > 0.1) {
+      const f = 1 - md / MOUSE_RADIUS;
+      mouseScale = 1 - f * 0.5; // 最近时缩小到 50%
+    }
+  }
 
-  const hoverRadius = dot.baseRadius * 1.1;
-  const hoverTargetR = dot.isLetterDot ? 0xf0 : 0x40;
-  const hoverTargetG = dot.isLetterDot ? 0xf0 : 0x40;
-  const hoverTargetB = dot.isLetterDot ? 0xf0 : 0x40;
-  const hoverAlpha = dot.isLetterDot ? 1.0 : 0.5;
+  const px = dot.x;
+  const py = dot.y;
 
-  const ht = hoverTransition;
-  const radius = normalRadius + (hoverRadius - normalRadius) * ht;
-  const cr = Math.floor(normalR + (hoverTargetR - normalR) * ht);
-  const cg = Math.floor(normalG + (hoverTargetG - normalG) * ht);
-  const cb = Math.floor(normalB + (hoverTargetB - normalB) * ht);
-  const normalAlpha = 0.7 + 0.3 * ((pulse + 1) / 2);
-  const alpha = normalAlpha + (hoverAlpha - normalAlpha) * ht;
+  const hoverScale = dot.letter ? 1 + 0.1 * ht : 1 - 0.05 * ht;
+  const r = (breathR + (dot.baseR - breathR) * ht) * ent * hoverScale * mouseScale;
 
-  // 绘制圆角矩形（边长 = radius * 2）
-  const size = radius * 2;
-  // 圆角半径系数，0=直角矩形，1=圆形，0.8 接近圆形
-  const cornerRadius = radius * 0.8;
-  const halfSize = radius;
+  const [cr, cg, cb] = dot.color;
+  const nr = Math.max(cr, 0x33);
+  const ng = Math.max(cg, 0x33);
+  const nb = Math.max(cb, 0x33);
 
+  // 彩色点的灰度版本（RGB 平均值）
+  const grayVal = ~~((cr + cg + cb) / 3);
+
+  // 彩色↔灰度呼吸：用 sin 让颜色在原始彩色和灰度之间周期性摆动
+  // 频率 0.8，相位用 dot.phase，hover 时压制这个效果
+  const colorBreath = Math.sin(t * 0.8 + dot.phase) * 0.5 + 0.5; // 0~1
+  const colorBlend = dot.accent ? colorBreath * (1 - ht * 0.8) : 0; // hover 时减弱
+
+  // 混合后的基础颜色：彩色点会在彩色和灰度之间呼吸
+  const baseR = nr + (grayVal - nr) * colorBlend;
+  const baseG = ng + (grayVal - ng) * colorBlend;
+  const baseB = nb + (grayVal - nb) * colorBlend;
+
+  let fr, fg, fb, fa;
+  if (dot.letter) {
+    fr = baseR + (0xf0 - baseR) * ht;
+    fg = baseG + (0xf0 - baseG) * ht;
+    fb = baseB + (0xf0 - baseB) * ht;
+    fa = breathA + (1 - breathA) * ht;
+  } else {
+    fr = baseR + (0x40 - baseR) * ht;
+    fg = baseG + (0x40 - baseG) * ht;
+    fb = baseB + (0x40 - baseB) * ht;
+    fa = breathA + (0.45 - breathA) * ht;
+  }
+
+  fa *= ent;
+
+  if (fr > 255) fr = 255;
+  if (fg > 255) fg = 255;
+  if (fb > 255) fb = 255;
+
+  if (dot.accent && ht < 0.8) {
+    const glowA = 0.5 * (1 - ht) * ent;
+    ctx.shadowColor = `rgba(${~~baseR},${~~baseG},${~~baseB},${glowA.toFixed(2)})`;
+    ctx.shadowBlur = 10 + pulse * 4;
+  }
+
+  const s = r * 2;
+  const rr = r * 0.8;
   ctx.beginPath();
-  ctx.moveTo(dot.x - halfSize + cornerRadius, dot.y - halfSize);
-  ctx.lineTo(dot.x + halfSize - cornerRadius, dot.y - halfSize);
-  ctx.arcTo(dot.x + halfSize, dot.y - halfSize, dot.x + halfSize, dot.y - halfSize + cornerRadius, cornerRadius);
-  ctx.lineTo(dot.x + halfSize, dot.y + halfSize - cornerRadius);
-  ctx.arcTo(dot.x + halfSize, dot.y + halfSize, dot.x + halfSize - cornerRadius, dot.y + halfSize, cornerRadius);
-  ctx.lineTo(dot.x - halfSize + cornerRadius, dot.y + halfSize);
-  ctx.arcTo(dot.x - halfSize, dot.y + halfSize, dot.x - halfSize, dot.y + halfSize - cornerRadius, cornerRadius);
-  ctx.lineTo(dot.x - halfSize, dot.y - halfSize + cornerRadius);
-  ctx.arcTo(dot.x - halfSize, dot.y - halfSize, dot.x - halfSize + cornerRadius, dot.y - halfSize, cornerRadius);
-  ctx.closePath();
-
-  ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
-  ctx.globalAlpha = alpha;
+  ctx.roundRect(px - r, py - r, s, s, rr);
+  ctx.fillStyle = `rgba(${~~fr},${~~fg},${~~fb},${fa.toFixed(3)})`;
   ctx.fill();
-  ctx.globalAlpha = 1;
+
+  if (dot.accent) {
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+  }
 }
 
-function animate() {
+// ═══════════════════════════════════════════════════
+//  Main loop
+// ══════════════════════════════════════════════════
+function animate(ts) {
+  if (!lastTs) lastTs = ts;
+  const dt = Math.min((ts - lastTs) * 0.001, 0.05);
+  lastTs = ts;
+  elapsed += dt;
+  time += dt;
+
   const canvas = canvasRef.value;
-  if (!canvas) return;
+  if (!canvas) {
+    animId = requestAnimationFrame(animate);
+    return;
+  }
 
   const ctx = canvas.getContext("2d");
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
 
-  canvas.width = w * dpr;
-  canvas.height = h * dpr;
-  ctx.scale(dpr, dpr);
+  if (w !== cachedW || h !== cachedH || dpr !== cachedDpr) {
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx.scale(dpr, dpr);
+    cachedW = w;
+    cachedH = h;
+    cachedDpr = dpr;
+  }
 
-  ctx.fillStyle = "#000000";
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, w, h);
 
-  // 平滑过渡 hover 状态（系数越小过渡越慢越柔和）
-  const targetHover = isHovering ? 1 : 0;
-  hoverTransition += (targetHover - hoverTransition) * 0.04;
+  const htTarget = hovering ? 1 : 0;
+  hoverT += (htTarget - hoverT) * (1 - Math.exp(-6 * dt));
+  if (Math.abs(hoverT - htTarget) < 0.001) hoverT = htTarget;
+
+  const entProg = clamp01(elapsed / ENTER_TIME);
 
   ctx.save();
   ctx.translate(w / 2, h / 2);
-  dots.forEach((dot) => drawDot(ctx, dot, time));
+
+  for (let i = 0; i < dots.length; i++) {
+    const d = dots[i];
+
+    let ent = 1;
+    if (entProg < 1) {
+      const lt = clamp01(
+        (entProg - d.delay) / Math.max(0.001, 1 - d.delay)
+      );
+      const e = easeOutExpo(lt);
+      d.x = d.sx + (d.tx - d.sx) * e;
+      d.y = d.sy + (d.ty - d.sy) * e;
+      ent = e;
+    } else {
+      d.x = d.tx;
+      d.y = d.ty;
+    }
+
+    drawDot(ctx, d, time, hoverT, ent);
+  }
+
   ctx.restore();
-
-  time += 0.016;
-  animationId = requestAnimationFrame(animate);
+  animId = requestAnimationFrame(animate);
 }
 
-function handleMouseEnter() {
-  isHovering = true;
+// ═══════════════════════════════════════════════════
+//  Events
+// ═══════════════════════════════════════════════════
+function onMove(e) {
+  const rect = canvasRef.value.getBoundingClientRect();
+  mouse.x = e.clientX - rect.left - rect.width / 2;
+  mouse.y = e.clientY - rect.top - rect.height / 2;
 }
 
-function handleMouseLeave() {
-  isHovering = false;
+function onEnter() {
+  hovering = true;
+  mouse.active = true;
 }
 
+function onLeave() {
+  hovering = false;
+  mouse.active = false;
+  mouse.x = mouse.y = -9999;
+}
+
+// ═══════════════════════════════════════════════════
+//  Lifecycle
+// ═══════════════════════════════════════════════════
 onMounted(() => {
   createDots();
-  animate();
-
-  const canvas = canvasRef.value;
-  if (canvas) {
-    canvas.addEventListener("mouseenter", handleMouseEnter);
-    canvas.addEventListener("mouseleave", handleMouseLeave);
+  const c = canvasRef.value;
+  if (c) {
+    c.addEventListener("mouseenter", onEnter);
+    c.addEventListener("mouseleave", onLeave);
+    c.addEventListener("mousemove", onMove);
   }
+  animId = requestAnimationFrame(animate);
 });
 
 onBeforeUnmount(() => {
-  if (animationId) cancelAnimationFrame(animationId);
-  const canvas = canvasRef.value;
-  if (canvas) {
-    canvas.removeEventListener("mouseenter", handleMouseEnter);
-    canvas.removeEventListener("mouseleave", handleMouseLeave);
+  if (animId) cancelAnimationFrame(animId);
+  const c = canvasRef.value;
+  if (c) {
+    c.removeEventListener("mouseenter", onEnter);
+    c.removeEventListener("mouseleave", onLeave);
+    c.removeEventListener("mousemove", onMove);
   }
 });
 </script>
